@@ -278,12 +278,13 @@ const isFav = p => favs.includes(p.id);
 })();
 
 /* ---- views ---- */
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const show = v => { document.getElementById('home').classList.toggle('on', v==='home');
                     document.getElementById('dir').classList.toggle('on', v==='dir');
-                    window.scrollTo(0,0); };
+                    if (v === 'dir') window.scrollTo(0,0); }; // scroll to top only when entering the directory; going home lets the caller control scroll
 document.getElementById('dirbtn').onclick = () => show('dir');
 document.getElementById('dirbtn2').onclick = () => show('dir');
-document.getElementById('back').onclick = () => show('home');
+document.getElementById('back').onclick = () => { show('home'); window.scrollTo({top:0, behavior: reducedMotion() ? 'auto' : 'smooth'}); };
 
 /* ---- geo utils ---- */
 function haversine(lat1, lon1, lat2, lon2) {
@@ -313,7 +314,7 @@ function renderTops() {
           ${t._dist!=null?`<span class="dist">📍 ${fmtDist(t._dist)}</span>`:''}
         </div>
       </div>
-      <a class="mgo" href="${t.url}" target="_blank">Maps ↗</a>
+      <a class="mgo" href="${t.url}" target="_blank" rel="noopener noreferrer">Maps ↗</a>
     </div>`).join('');
 }
 
@@ -517,6 +518,8 @@ function decide() {
   const wrap = document.getElementById('pickwrap'), pick = document.getElementById('pick');
   wrap.style.display = 'block';
   show('home');
+  const scrollOpts = { behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' };
+  wrap.scrollIntoView(scrollOpts); // land on the receipt immediately while it prints
   const orderNo = String(Math.floor(Math.random()*9000)+1000);
   let i = 0, delay = 40;
   const spin = () => {
@@ -542,11 +545,11 @@ function decide() {
         <div class="rrow"><span>PRICE</span><b>${p.price} est. /pax</b></div>
         ${p._dist!=null?`<div class="rrow"><span>DISTANCE</span><b>📍 ${fmtDist(p._dist)}</b></div>`:''}
         <div class="rdash"></div>
-        <a class="rgo" href="${p.url}" target="_blank">TAKE ME THERE 🗺️</a>
+        <a class="rgo" href="${p.url}" target="_blank" rel="noopener noreferrer">TAKE ME THERE 🗺️</a>
         <button class="rre" onclick="decide()">↻ NO — CABUT LAGI</button>
         <div class="rfoot">TERIMA KASIH · JOM MAKAN!</div>`;
       spinning = false;
-      wrap.scrollIntoView({behavior:'smooth', block:'center'});
+      wrap.scrollIntoView(scrollOpts);
       return;
     }
     setTimeout(spin, delay); delay *= 1.09;
@@ -562,7 +565,7 @@ function openModal(p) {
     <div class="row2"><span class="tag">${p.area}</span><span class="tag">${p.craving}</span><span class="pr">${p.price} est. / person</span>${p._dist!=null?`<span class="dist">📍 ${fmtDist(p._dist)} away</span>`:''}</div>
     ${p.hours?`<div class="row2">🕒 ${p.hours}</div>`:''}
     ${p.phone?`<div class="row2">📞 <a href="tel:${p.phone}" style="color:var(--accent)">${p.phone}</a></div>`:''}
-    <a class="btn" href="${p.url}" target="_blank">Open in Maps ↗</a>
+    <a class="btn" href="${p.url}" target="_blank" rel="noopener noreferrer">Open in Maps ↗</a>
     <button class="btn2" id="mfav">${isFav(p)?'❤ Saved to favourites':'🤍 Save to favourites'}</button>`;
   modal.querySelector('.x').onclick = closeModal;
   modal.querySelector('#mfav').onclick = () => toggleFav(p);
