@@ -76,7 +76,9 @@ try {
   await page.waitForTimeout(500);
   const rows = await page.locator('.row').count();
   check('directory lists places (>=100)', rows >= 100);
-  check('A-Z letter sections render', (await page.locator('.ltr').count()) > 50);
+  check('A-Z letter sections render', (await page.locator('.ltr').count()) >= 20);
+  const letters = await page.locator('.ltr').allTextContents();
+  check('letter sections in alphabetical order', letters.every((l, i) => i === 0 || l > letters[i - 1]));
   check('YOU ARE HERE badge visible after location', (await page.locator('#youare:visible').count()) === 1);
 
   // search
