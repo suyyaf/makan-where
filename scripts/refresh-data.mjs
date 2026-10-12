@@ -55,7 +55,8 @@ function toPlace(el, area) {
     hours: t.opening_hours || '',
     phone: t['contact:phone'] || t.phone || '',
     halal: t['diet:halal'] === 'yes',
-    url: `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`,
+    lat: +(+lat).toFixed(7), lon: +(+lon).toFixed(7),
+    url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${name} ${area}`)}`,
   };
 }
 
