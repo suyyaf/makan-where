@@ -1,0 +1,13 @@
+{
+  "name": "makan-where",
+  "version": "1.0.0",
+  "private": true,
+  "description": "🍚 Decides where you're eating tonight — Cyberjaya & Putrajaya edition",
+  "scripts": {
+    "test": "node tests/smoke.mjs",
+    "test:prod": "cross-env SMOKE_URL=https://makan-where-steel.vercel.app node tests/smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.0"
+  }
+}
