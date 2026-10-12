@@ -1,5 +1,5 @@
 // Makan Where? service worker — app-shell cache, network-first with cache fallback.
-const CACHE = 'makan-where-v3';
+const CACHE = 'makan-where-v4';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -20,7 +20,7 @@ self.addEventListener('fetch', (e) => {
   // never cache cross-origin (fonts, maps links open externally anyway)
   if (url.origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-cache' }) // slow networks still revalidate; only true offline falls back to cache
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));
