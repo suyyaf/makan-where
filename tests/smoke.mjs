@@ -54,11 +54,21 @@ try {
   await page.locator('#cCraving .chip[data-v="Mamak"]').click();
   const poolText = await page.textContent('#critpool');
   check('criteria pool counter > 0', /in the pot/.test(poolText) && !poolText.startsWith('0 '));
+  // open-now + halal toggles in criteria
+  await page.locator('#cExtras .chip[data-c="open"]').click();
+  const openPool = await page.textContent('#critpool');
+  check('open-now criteria narrows pool', parseInt(openPool) > 0 && parseInt(openPool) < 176);
+  await page.locator('#cExtras .chip[data-c="open"]').click();
+  await page.locator('#cExtras .chip[data-c="halal"]').click();
+  const halalPool = await page.textContent('#critpool');
+  check('halal criteria narrows pool', parseInt(halalPool) > 0 && parseInt(halalPool) < 176);
+  await page.locator('#cExtras .chip[data-c="halal"]').click();
   await page.click('#decide');
   await page.waitForSelector('#pick .rname', { timeout: 8000 });
   await page.waitForFunction(() => /ORDER NO\./.test(document.getElementById('pick').textContent), { timeout: 10000 });
   const receipt = await page.textContent('#pick');
   check('receipt prints verdict with order no.', /ORDER NO\./.test(receipt));
+  check('receipt has share button', (await page.locator('#pick .rre:has-text("SHARE")').count()) === 1);
   check('no JS errors after interactions', errors.length === 0);
 
   // directory
@@ -83,6 +93,19 @@ try {
   const cj = await page.textContent('#count');
   check('area filter narrows results', parseInt(cj.match(/\d+/)[0]) < rows);
   await page.locator('#area .chip[data-v="Cyberjaya"]').click(); // toggle off
+  await page.waitForTimeout(300);
+
+  // extras filters (open now / halal)
+  await page.locator('#extras .chip[data-k="openOnly"]').click();
+  await page.waitForTimeout(300);
+  const openCt = parseInt((await page.textContent('#count')).match(/\d+/)[0]);
+  check('directory open-now filter works', openCt > 0 && openCt < rows);
+  await page.locator('#extras .chip[data-k="openOnly"]').click();
+  await page.locator('#extras .chip[data-k="halalOnly"]').click();
+  await page.waitForTimeout(300);
+  const halalCt = parseInt((await page.textContent('#count')).match(/\d+/)[0]);
+  check('directory halal filter works', halalCt > 0 && halalCt < rows);
+  await page.locator('#extras .chip[data-k="halalOnly"]').click();
   await page.waitForTimeout(300);
 
   // map
@@ -120,6 +143,7 @@ try {
   check('mobile: bottom action bar visible', (await mpage.locator('#decide:visible').count()) === 1);
   const tap = await mpage.locator('.mitem >> nth=0').boundingBox();
   check('mobile: menu rows are tappable (>=40px tall)', !!tap && tap.height >= 40);
+  check('mobile: PWA manifest linked', (await mpage.getAttribute('link[rel="manifest"]', 'href')) === 'manifest.webmanifest');
 
   await ctx.close(); await mctx.close();
 } finally {
