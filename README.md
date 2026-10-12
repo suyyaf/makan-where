@@ -11,6 +11,10 @@ Decides where you're eating tonight — **Cyberjaya & Putrajaya** edition. A mob
 - 🗂️ **Food Directory** — mall-style A–Z directory of 176 eateries with search, filters, open-now & halal filters, and map
 - 📱 **PWA** — installable on your phone's home screen, works offline (service worker + manifest)
 
+## Live
+
+**https://makan-where-steel.vercel.app** (Vercel, auto-deploys from `main` on GitHub)
+
 ## Data
 
 - 176 eateries from **OpenStreetMap** (Overpass API) across Cyberjaya & Putrajaya
