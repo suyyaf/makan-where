@@ -8,7 +8,7 @@ Decides where you're eating tonight — **Cyberjaya & Putrajaya** edition. A mob
 - 🎲 **Tolong pilih!** — a slot-machine picker that prints your dinner verdict as a **receipt** (order number, area, craving, price range, distance)
 - 🎚️ **Tune the verdict** — optional criteria (area, craving, budget, max distance, open-now, halal) before rolling
 - 📲 **Share the verdict** — one tap sends the receipt to WhatsApp/group chats (Web Share API, clipboard fallback)
-- 🗂️ **Food Directory** — mall-style A–Z directory of 176 eateries with search, filters, open-now & halal filters, and map
+- 🗂️ **Food Directory** — mall-style A–Z directory of the live OSM dataset (185 places at last refresh) with search, filters, open-now & halal filters, and map
 - 📱 **PWA** — installable on your phone's home screen, works offline (service worker + manifest)
 
 ## Live

@@ -1,5 +1,5 @@
 // Makan Where? service worker — app-shell cache, network-first with cache fallback.
-const CACHE = 'makan-where-v2';
+const CACHE = 'makan-where-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

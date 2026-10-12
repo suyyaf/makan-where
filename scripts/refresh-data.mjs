@@ -43,6 +43,8 @@ function classify(t) {
 
 function toPlace(el, area) {
   const t = el.tags || {};
+  // skip permanently closed / disused / abandoned eateries (lifecycle tags)
+  if (t.disused || t['disused:amenity'] || t['was:amenity'] || t['abandoned:amenity'] || t['not:amenity'] || t['closed:amenity']) return null;
   const name = (t.name || '').trim();
   if (!name) return null;
   const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
@@ -56,7 +58,7 @@ function toPlace(el, area) {
     phone: t['contact:phone'] || t.phone || '',
     halal: t['diet:halal'] === 'yes',
     lat: +(+lat).toFixed(7), lon: +(+lon).toFixed(7),
-    url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${name} ${area}`)}`,
+    url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name.toLowerCase().includes(area.toLowerCase()) ? name : `${name} ${area}`)}`,
   };
 }
 
@@ -72,10 +74,11 @@ function dedupe(list) {
 }
 
 async function fetchOverpass() {
-  const parts = Object.entries(BBOXES).map(([area, [s, w, n, e]]) =>
-    ['restaurant', 'cafe', 'fast_food', 'food_court']
-      .map((am) => `node["amenity"="${am}"](${s},${w},${n},${e});`).join('')).join('');
-  const q = `[out:json][timeout:120];(${parts});out center 400;`;
+  // nodes AND ways (mall outlets/food courts are often mapped as way footprints)
+  const parts = Object.values(BBOXES).map(([s, w, n, e]) =>
+    ['node', 'way'].map((k) =>
+      `${k}["amenity"~"^(restaurant|cafe|fast_food|food_court|bar|pub|ice_cream)$"](${s},${w},${n},${e});`).join('')).join('');
+  const q = `[out:json][timeout:120];(${parts});out center 800;`;
   const mirrors = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
   let lastErr;
   for (const mirror of mirrors) {
@@ -86,8 +89,14 @@ async function fetchOverpass() {
         const json = await res.json();
         let rows = [];
         for (const el of json.elements || []) {
-          for (const [area] of Object.entries(BBOXES)) {
-            const p = toPlace(el, area); if (p) rows.push(p);
+          // assign to the FIRST bbox that actually contains the point (bboxes overlap slightly)
+          const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+          if (lat == null || lon == null) continue;
+          for (const [area, [s, w, n, e]] of Object.entries(BBOXES)) {
+            if (lat >= s && lat <= n && lon >= w && lon <= e) {
+              const p = toPlace(el, area); if (p) rows.push(p);
+              break;
+            }
           }
         }
         return dedupe(rows);
@@ -98,7 +107,7 @@ async function fetchOverpass() {
 }
 
 function inject(html, varName, data) {
-  const re = new RegExp(`^const ${varName} = .*;$`, 'm');
+  const re = new RegExp(`^const ${varName} = .*;\\r?$`, 'm');
   if (!re.test(html)) throw new Error(`could not find ${varName} line in index.html`);
   return html.replace(re, `const ${varName} = ${JSON.stringify(data)};`);
 }
