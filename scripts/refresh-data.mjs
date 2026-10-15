@@ -15,6 +15,9 @@ import { fileURLToPath } from 'url';
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const OFFLINE = process.argv.includes('--offline');
 
+// single source of truth for the junk-name + dialable-phone rules
+import { isJunkName, isDialablePhone } from './lib/rules.mjs';
+
 const BBOXES = {
   Cyberjaya: [2.8940, 101.6234, 2.9631, 101.6749], // s w n e
   Putrajaya: [2.8768, 101.6598, 2.9831, 101.7327],
@@ -41,19 +44,6 @@ function classify(t) {
   return 'Local Eats';
 }
 
-/* Names that are not real eateries: OSM mistags (a mall tree mapped as a
-   restaurant), institutional canteens nobody can walk into, and bare generic
-   nouns that tell a user nothing. Keep this list explicit and reviewable. */
-const JUNK_NAME = /^(cafe|canteen|restaurant|food ?court|kedai|warung|gerai|stall|makanan)$/i;
-const JUNK_ANY = /\b(cafeteria|students?|elementary|secondary school|kindergarten|nursery|staff ?only|hospital|clinic|pokok|tree|bus stop|toilet|surau|masjid|prayer)\b/i;
-
-function isJunkName(name) {
-  const n = name.trim();
-  if (JUNK_NAME.test(n)) return true;
-  if (JUNK_ANY.test(n)) return true;
-  return false;
-}
-
 function toPlace(el, area) {
   const t = el.tags || {};
   // skip permanently closed / disused / abandoned eateries (lifecycle tags)
@@ -68,7 +58,7 @@ function toPlace(el, area) {
   // OSM sometimes carries redacted numbers like "+601****8264" — a broken tel:
   // link is worse than none, so drop anything that is not actually dialable.
   const rawPhone = t['contact:phone'] || t.phone || '';
-  const phone = /^[+()\d][\d\s()+-]{5,}$/.test(rawPhone.trim()) ? rawPhone.trim() : '';
+  const phone = isDialablePhone(rawPhone) ? rawPhone.trim() : '';
   return {
     name, area, craving: classify({ ...t, amenity: kind }),
     band, price: PRICE_EST[band],
@@ -130,12 +120,29 @@ function inject(html, varName, data) {
   return html.replace(re, `const ${varName} = ${JSON.stringify(data)};`);
 }
 
+/* The place count in the meta tags is static: crawlers do not run JS, so it
+   cannot be runtime-derived like the count rendered into the page body is.
+   Since this pipeline is the only thing that ever changes the count, it also
+   rewrites the meta tags here — so the shipped description and the served
+   dataset can never drift apart. */
+function syncMetaCounts(html, count) {
+  const patterns = [
+    [/(\d+) places, proximity-ranked/g, `${count} places, proximity-ranked`],
+    [/(\d+) places across Cyberjaya/g, `${count} places across Cyberjaya`],
+    [/receipt reading (\d+) places/g, `receipt reading ${count} places`],
+  ];
+  let changed = 0;
+  const out = patterns.reduce((s, [re, replacement]) => s.replace(re,
+    (m, n) => { if (String(n) === String(count)) return m; changed++; return replacement; }), html);
+  return { out, changed };
+}
+
 const places = OFFLINE ? JSON.parse(fs.readFileSync(path.join(root, 'data', 'places.json'), 'utf8'))
                            .filter(p => !isJunkName(p.name))
                            .map(p => {
                              // re-sanitise phones on the offline path so a stale
                              // snapshot is cleaned up rather than re-injected as-is
-                             const ok = /^[+()\d][\d\s()+-]{5,}$/.test(String(p.phone || '').trim());
+                             const ok = isDialablePhone(p.phone);
                              return ok ? p : { ...p, phone: '' };
                            })
                        : await fetchOverpass();
@@ -143,8 +150,17 @@ const places = OFFLINE ? JSON.parse(fs.readFileSync(path.join(root, 'data', 'pla
 fs.writeFileSync(path.join(root, 'data', 'places.json'), JSON.stringify(places));
 const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const tops = JSON.parse(fs.readFileSync(path.join(root, 'data', 'tops.json'), 'utf8'));
-fs.writeFileSync(path.join(root, 'index.html'), inject(inject(index, 'PLACES', places), 'TOPS', tops));
+const { out: nextIndex, changed } = syncMetaCounts(inject(inject(index, 'PLACES', places), 'TOPS', tops), places.length);
+fs.writeFileSync(path.join(root, 'index.html'), nextIndex);
+
+/* The OG card's own copy of the count lives in icons/og-1200x630.png, which
+   make-og.mjs derives from data/places.json the same way — so the image is
+   regenerated to match whatever this run just wrote. */
+import { spawnSync } from 'child_process';
+const og = spawnSync(process.execPath, [path.join(root, 'scripts', 'make-og.mjs')], { stdio: 'inherit' });
+if (og.status !== 0) console.warn(`og image not regenerated (exit ${og.status}) — run "node scripts/make-og.mjs" manually`);
 
 console.log(`refreshed ${places.length} places ` +
   `(${places.filter(p => p.halal).length} halal-tagged, ${places.filter(p => p.hours).length} with hours)` +
+  (changed ? `, meta description updated (${changed} tag(s))` : ', meta description already in sync') +
   (OFFLINE ? ' [offline snapshot]' : ' [live Overpass]'));

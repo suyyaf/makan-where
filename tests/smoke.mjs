@@ -6,6 +6,7 @@
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const URL = process.env.SMOKE_URL || 'file:///' + path.join(root, 'index.html').replace(/\\/g, '/');
@@ -150,6 +151,22 @@ try {
   await ctx.close(); await mctx.close();
 } finally {
   await browser.close();
+}
+
+// ---------- static checks (no browser needed) ----------
+// The dialable-phone rule exists in two places by necessity (the bypass logic in
+// the pipeline, the render-time decision in the app). They must stay character-
+// identical, so this asserts the literal in index.html matches rules.mjs — if
+// one is edited and the other is not, the smoke suite fails instead of letting
+// the tel: links disagree with what the pipeline actually shipped.
+try {
+  const rules = await fs.promises.readFile(path.join(root, 'scripts', 'lib', 'rules.mjs'), 'utf8');
+  const htmlSrc = await fs.promises.readFile(path.join(root, 'index.html'), 'utf8');
+  const dialInRules = rules.match(/export const DIAL_RE = (\/[^\n]+\/);/)?.[1];
+  const dialInHtml = htmlSrc.match(/const dialable = p => (\/[^\n]+\/)\.test/)?.[1];
+  check('phone rule in index.html matches scripts/lib/rules.mjs', !!dialInRules && !!dialInHtml && dialInRules === dialInHtml);
+} catch (e) {
+  check('phone rule drift check could not run (read error)', false);
 }
 
 const failed = results.filter(r => !r.ok);

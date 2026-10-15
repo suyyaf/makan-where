@@ -8,6 +8,7 @@
     "test:prod": "cross-env SMOKE_URL=https://makan-where-steel.vercel.app node tests/smoke.mjs"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "playwright": "^1.64.0"
   }
 }
