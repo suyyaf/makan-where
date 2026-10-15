@@ -1,0 +1,11 @@
+# Only the app shell should be publicly reachable. Everything else — the data
+# pipeline, the test suite, the raw snapshot, and old single-file backups — is
+# internal and should 404 rather than be served and indexed.
+tests/
+scripts/
+data/
+index-v*-backup.html
+package.json
+package-lock.json
+README.md
+.gitignore

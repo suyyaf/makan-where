@@ -1,5 +1,5 @@
 // Makan Where? service worker — app-shell cache, network-first with cache fallback.
-const CACHE = 'makan-where-v4';
+const CACHE = 'makan-where-v5';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -22,8 +22,11 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     fetch(e.request, { cache: 'no-cache' }) // slow networks still revalidate; only true offline falls back to cache
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        // never cache a failure — a cached 404/500 would be served as if valid
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+        }
         return res;
       })
       .catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))

@@ -41,21 +41,39 @@ function classify(t) {
   return 'Local Eats';
 }
 
+/* Names that are not real eateries: OSM mistags (a mall tree mapped as a
+   restaurant), institutional canteens nobody can walk into, and bare generic
+   nouns that tell a user nothing. Keep this list explicit and reviewable. */
+const JUNK_NAME = /^(cafe|canteen|restaurant|food ?court|kedai|warung|gerai|stall|makanan)$/i;
+const JUNK_ANY = /\b(cafeteria|students?|elementary|secondary school|kindergarten|nursery|staff ?only|hospital|clinic|pokok|tree|bus stop|toilet|surau|masjid|prayer)\b/i;
+
+function isJunkName(name) {
+  const n = name.trim();
+  if (JUNK_NAME.test(n)) return true;
+  if (JUNK_ANY.test(n)) return true;
+  return false;
+}
+
 function toPlace(el, area) {
   const t = el.tags || {};
   // skip permanently closed / disused / abandoned eateries (lifecycle tags)
   if (t.disused || t['disused:amenity'] || t['was:amenity'] || t['abandoned:amenity'] || t['not:amenity'] || t['closed:amenity']) return null;
   const name = (t.name || '').trim();
   if (!name) return null;
+  if (isJunkName(name)) return null;
   const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
   if (lat == null) return null;
   const kind = t.amenity || 'restaurant';
   const band = (kind === 'fast_food' || kind === 'food_court') ? 'jimat' : (kind === 'cafe' ? 'cafe' : 'sedap');
+  // OSM sometimes carries redacted numbers like "+601****8264" — a broken tel:
+  // link is worse than none, so drop anything that is not actually dialable.
+  const rawPhone = t['contact:phone'] || t.phone || '';
+  const phone = /^[+()\d][\d\s()+-]{5,}$/.test(rawPhone.trim()) ? rawPhone.trim() : '';
   return {
     name, area, craving: classify({ ...t, amenity: kind }),
     band, price: PRICE_EST[band],
     hours: t.opening_hours || '',
-    phone: t['contact:phone'] || t.phone || '',
+    phone,
     halal: t['diet:halal'] === 'yes',
     lat: +(+lat).toFixed(7), lon: +(+lon).toFixed(7),
     url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name.toLowerCase().includes(area.toLowerCase()) ? name : `${name} ${area}`)}`,
@@ -113,6 +131,13 @@ function inject(html, varName, data) {
 }
 
 const places = OFFLINE ? JSON.parse(fs.readFileSync(path.join(root, 'data', 'places.json'), 'utf8'))
+                           .filter(p => !isJunkName(p.name))
+                           .map(p => {
+                             // re-sanitise phones on the offline path so a stale
+                             // snapshot is cleaned up rather than re-injected as-is
+                             const ok = /^[+()\d][\d\s()+-]{5,}$/.test(String(p.phone || '').trim());
+                             return ok ? p : { ...p, phone: '' };
+                           })
                        : await fetchOverpass();
 
 fs.writeFileSync(path.join(root, 'data', 'places.json'), JSON.stringify(places));
