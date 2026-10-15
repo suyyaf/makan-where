@@ -165,8 +165,16 @@ try {
   const dialInRules = rules.match(/export const DIAL_RE = (\/[^\n]+\/);/)?.[1];
   const dialInHtml = htmlSrc.match(/const dialable = p => (\/[^\n]+\/)\.test/)?.[1];
   check('phone rule in index.html matches scripts/lib/rules.mjs', !!dialInRules && !!dialInHtml && dialInRules === dialInHtml);
+
+  // Raw `<` in the injected PLACES JSON breaks out of the inline <script> it is
+  // written into: `</script>` closes the element and whatever follows is painted
+  // into the DOM as markup, NOT parsed as JS — the app's esc() helper never
+  // runs. inject() escapes it as \u003c; this asserts that stays true.
+  const placesLine = htmlSrc.match(/const PLACES = (.+)/)?.[1];
+  check('injected PLACES JSON has no raw `<` (inline script break-out)',
+    !!placesLine && placesLine.startsWith('[') && placesLine.slice(0, -1).indexOf('<') === -1);
 } catch (e) {
-  check('phone rule drift check could not run (read error)', false);
+  check('static drift/escape checks could not run (read error)', false);
 }
 
 const failed = results.filter(r => !r.ok);

@@ -117,7 +117,19 @@ async function fetchOverpass() {
 function inject(html, varName, data) {
   const re = new RegExp(`^const ${varName} = .*;\\r?$`, 'm');
   if (!re.test(html)) throw new Error(`could not find ${varName} line in index.html`);
-  return html.replace(re, `const ${varName} = ${JSON.stringify(data)};`);
+  /* JSON.stringify leaves these characters raw — but this JSON is written into
+     an inline <script> element, where they are live break-outs:
+       `</script>`            closes the script tag; anything after it is NOT
+                              parsed as JS but interpolated as HTML, so a hostile
+                              OSM `name` tag ("<script>alert(1)</script>") can
+                              run arbitrary script before the app's esc() has
+                              any chance to neutralise it
+       U+2028 / U+2029        valid inside JSON but legacy intra-element
+                              terminators in JS string literals
+     Backslashes etc. are already correctly escaped by JSON.stringify itself. */
+  const json = JSON.stringify(data).replace(/[<\u2028\u2029]/g,
+    c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+  return html.replace(re, `const ${varName} = ${json};`);
 }
 
 /* The place count in the meta tags is static: crawlers do not run JS, so it
