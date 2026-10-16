@@ -1,0 +1,19 @@
+# Makan Where? — run the smoke suite on every push (and PR).
+name: smoke
+on:
+  push:
+  pull_request:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      # Playwright's browser needs one install per fresh runner.
+      - run: npx playwright install --with-deps chromium
+      # file://-driven smoke suite; the production variant is SMOKE_URL=... npm run test:prod
+      - run: node tests/smoke.mjs

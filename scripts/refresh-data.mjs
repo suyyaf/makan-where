@@ -159,11 +159,39 @@ const places = OFFLINE ? JSON.parse(fs.readFileSync(path.join(root, 'data', 'pla
                            })
                        : await fetchOverpass();
 
+/* A hash-based Content-Security-Policy cannot be hardcoded in vercel.json: the
+   inline <script> holding the dataset changes on every refresh, so the hash
+   would go stale and the site would combine a valid script with a policy that
+   blocks it. Instead the policy travels with the HTML file itself — this step
+   recomputes the SHA-256 of every inline <script> block and rewrites the
+   <meta http-equiv="Content-Security-Policy"> tag. Meta CSP cannot express
+   frame-ancestors, but vercel.json already sends X-Frame-Options: DENY. */
+import crypto from 'crypto';
+function replaceScriptCsp(html) {
+  /* The browser hashes the script's text AFTER the HTML input preprocessor has
+     normalised \r\n (and lone \r) to \n — so CRLF endings on disk hash to a
+     different sum than what the browser computes at parse time unless the
+     captured text is normalised the same way. No other transformation happens
+     inside the script data state. */
+  const lf = s => s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const hashes = [...lf(html).matchAll(/<script(?![^>]*\bsrc)[^>]*>([\s\S]*?)<\/script>/g)]
+    .map(m => crypto.createHash('sha256').update(m[1], 'utf8').digest('base64'))
+    .map(h => `'sha256-${h}'`);
+  if (!hashes.length) throw new Error('no inline <script> to hash — CSP would leave the page un-executable');
+  const policy = `default-src 'self'; script-src 'self' ${hashes.join(' ')}; `
+    + `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; `
+    + `font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; `
+    + `object-src 'none'; base-uri 'none'; form-action 'none'`;
+  return html
+    .replace(/<meta[^>]+http-equiv="Content-Security-Policy"[^>]*>\r?\n?/g, '')
+    .replace(/<\/title>/, `</title>\n<meta http-equiv="Content-Security-Policy" content="${policy}">`);
+}
+
 fs.writeFileSync(path.join(root, 'data', 'places.json'), JSON.stringify(places));
 const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const tops = JSON.parse(fs.readFileSync(path.join(root, 'data', 'tops.json'), 'utf8'));
 const { out: nextIndex, changed } = syncMetaCounts(inject(inject(index, 'PLACES', places), 'TOPS', tops), places.length);
-fs.writeFileSync(path.join(root, 'index.html'), nextIndex);
+fs.writeFileSync(path.join(root, 'index.html'), replaceScriptCsp(nextIndex));
 
 /* The OG card's own copy of the count lives in icons/og-1200x630.png, which
    make-og.mjs derives from data/places.json the same way — so the image is

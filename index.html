@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Makan Where? — Cyberjaya & Putrajaya</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-BdVgjT1Gc/IINChDC3axymQHdoaWbXi2UsNDKr1a2m0='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#ffb43a">
 <meta name="description" content="Decides where you're eating tonight — Cyberjaya & Putrajaya. 179 places, proximity-ranked top picks, receipt-style randomiser.">
 <link rel="canonical" href="https://makan-where-steel.vercel.app/">
@@ -368,7 +369,7 @@ function parseOH(oh) {
 PLACES.forEach(p => { p._open = parseOH(p.hours); });
 const OPEN_TXT = p => p._open === true ? '🟢 Open now' : p._open === false ? '🔴 Closed now' : null;
 let f = { area:'All', craving:'All', band:'All', q:'', favsOnly:false, openOnly:false, halalOnly:false };
-let me = null, selPin = null, spinning = false;
+let me = null, selPin = null, spinning = false, lastTrigger = null;
 let favs = (() => { try { return JSON.parse(localStorage.getItem('mw_favs')||'[]'); } catch(e){ return []; } })();
 const saveFavs = () => { try { localStorage.setItem('mw_favs', JSON.stringify(favs)); } catch(e){} };
 const isFav = p => favs.includes(p.id);
@@ -531,9 +532,9 @@ function render() {
   });
   document.getElementById('list').innerHTML = html || '<div class="count">No matches — try clearing filters.</div>';
   document.querySelectorAll('.row').forEach(r => {
-    r.onclick = e => { if (e.target.closest('.fav')) return; openModal(list[+r.dataset.id]); };
+    r.onclick = e => { if (e.target.closest('.fav')) return; openModal(list[+r.dataset.id], r); };
     r.onkeydown = e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(list[+r.dataset.id]); }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(list[+r.dataset.id], r); }
     };
   });
   document.querySelectorAll('.fav').forEach(b => b.onclick = e => { e.stopPropagation(); toggleFav(list[+b.dataset.fav]); });
@@ -567,7 +568,7 @@ function drawMap(list) {
     g.addEventListener('pointerenter', () => { tip.textContent = (EMOJI[p.craving]||'')+' '+p.name; tip.style.display='block'; });
     g.addEventListener('pointermove', e => { tip.style.left=(e.clientX+14)+'px'; tip.style.top=(e.clientY-10)+'px'; });
     g.addEventListener('pointerleave', () => tip.style.display='none');
-    g.addEventListener('click', e => { e.stopPropagation(); if (selPin) selPin.classList.remove('sel'); selPin = g; g.classList.add('sel'); openModal(p); });
+    g.addEventListener('click', e => { e.stopPropagation(); if (selPin) selPin.classList.remove('sel'); selPin = g; g.classList.add('sel'); openModal(p, g); });
     pinEls.push({g, p});
   });
   applyView();
@@ -707,9 +708,12 @@ function decide() {
         ${p._open!==null?`<div class="rrow"><span>STATUS</span><b class="rst ${p._open?'open':'closed'}">${p._open?'🟢 OPEN NOW':'🔴 CLOSED NOW'}</b></div>`:''}
         <div class="rdash"></div>
         <a class="rgo" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">TAKE ME THERE 🗺️</a>
-        <button class="rre" onclick="shareVerdict()">📲 SHARE THE VERDICT</button>
-        <button class="rre" onclick="decide()">↻ NO — CABUT LAGI</button>
+        <button class="rre" data-act="share">📲 SHARE THE VERDICT</button>
+        <button class="rre" data-act="reroll">↻ NO — CABUT LAGI</button>
         <div class="rfoot">TERIMA KASIH · JOM MAKAN!</div>`;
+      // inline onclick attributes would block a strict CSP; attach instead
+      pick.querySelector('[data-act="share"]').onclick = shareVerdict;
+      pick.querySelector('[data-act="reroll"]').onclick = () => { decide(); };
       window.__lastPick = p;
       spinning = false;
       wrap.scrollIntoView(scrollOpts);
@@ -734,7 +738,11 @@ async function shareVerdict() {
   catch (e) { toast('Sharing not supported here'); }
 }
 const mbg = document.getElementById('modalbg'), modal = document.getElementById('modal');
-function openModal(p) {
+/* rows are keyboard-navigable, so the dialog must participate: announce itself
+   as a dialog, park focus on the close button on open, and hand it back to the
+   trigger on close — otherwise keyboard users end up at the top of the page. */
+function openModal(p, trigger) {
+  if (trigger instanceof HTMLElement) lastTrigger = trigger;   // toggleFav re-opens without one, preserving the anchor
   modal.innerHTML = `<button class="x">✕</button>
     <h2>${(EMOJI[p.craving]||'')+' '+esc(p.name)}</h2>
     <div class="row2"><span class="tag">${esc(p.area)}</span><span class="tag">${esc(p.craving)}</span><span class="pr">${esc(p.price)} est. / person</span>${p._dist!=null?`<span class="dist">📍 ${fmtDist(p._dist)} away</span>`:''}${p._open===true?'<span class="open">🟢 Open now</span>':''}${p._open===false?'<span class="closed">🔴 Closed now</span>':''}${p.halal?'<span class="halaltag">🕌 Halal (tagged)</span>':''}</div>
@@ -745,8 +753,19 @@ function openModal(p) {
   modal.querySelector('.x').onclick = closeModal;
   modal.querySelector('#mfav').onclick = () => toggleFav(p);
   mbg.style.display = 'flex';
+  mbg.setAttribute('role','dialog');
+  mbg.setAttribute('aria-modal','true');
+  mbg.setAttribute('aria-label', (EMOJI[p.craving]||'')+' '+p.name);
+  modal.querySelector('.x').focus();
 }
-function closeModal() { mbg.style.display = 'none'; if (selPin) { selPin.classList.remove('sel'); selPin = null; } }
+function closeModal() {
+  mbg.style.display = 'none';
+  mbg.removeAttribute('role'); mbg.removeAttribute('aria-modal');
+  if (selPin) { selPin.classList.remove('sel'); selPin = null; }
+  const back = lastTrigger;
+  if (back && back.isConnected) back.focus({ preventScroll: true });
+  lastTrigger = null;
+}
 mbg.addEventListener('click', e => { if (e.target === mbg) closeModal(); });
 function toggleFav(p) {
   const i = favs.indexOf(p.id);

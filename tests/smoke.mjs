@@ -7,6 +7,7 @@ import { chromium } from 'playwright';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const URL = process.env.SMOKE_URL || 'file:///' + path.join(root, 'index.html').replace(/\\/g, '/');
@@ -173,6 +174,18 @@ try {
   const placesLine = htmlSrc.match(/const PLACES = (.+)/)?.[1];
   check('injected PLACES JSON has no raw `<` (inline script break-out)',
     !!placesLine && placesLine.startsWith('[') && placesLine.slice(0, -1).indexOf('<') === -1);
+
+  // The CSP's script hash travels with the HTML in a <meta> tag and is
+  // recomputed by refresh-data.mjs every run. If someone hand-edits the inline
+  // <script> between refreshes the hash goes stale and CSP blocks ALL inline
+  // scripts — the whole page dead-parses. Assert the on-disk script still
+  // hashes to the value in the policy; the browser normalises \r\n to \n before
+  // hashing (HTML input preprocessor), so do the same here.
+  const csp = htmlSrc.match(/http-equiv="Content-Security-Policy" content="([^"]*)"/)?.[1];
+  const scriptLf = htmlSrc.replace(/\r\n/g, '\n').match(/<script(?![^>]*\bsrc)[^>]*>([\s\S]*?)<\/script>/)?.[1];
+  const onDiskHash = scriptLf ? crypto.createHash('sha256').update(scriptLf, 'utf8').digest('base64') : null;
+  check('inline script hash still matches the shipped CSP',
+    !!csp && !!onDiskHash && csp.includes(`'sha256-${onDiskHash}'`));
 } catch (e) {
   check('static drift/escape checks could not run (read error)', false);
 }
