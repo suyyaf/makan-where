@@ -131,6 +131,394 @@ try {
   check('favourite persists to localStorage', !!stored && stored.length > 2);
   await page.click('#modal .x');
   check('modal closes', (await page.locator('#modalbg:visible').count()) === 0);
+  await page.evaluate(() => localStorage.removeItem('mw_favs'));
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForTimeout(600);
+  await page.click('#dirbtn');
+  await page.waitForTimeout(500);
+
+  // ---------- favourites: the hardened gate ----------
+  // Shape-agnostic readers. The approved saved-record shape is
+  //   { id, name, area, lat?, lon?, cuisine? }
+  // with `id` === "Area|Name" and `name` the bare human name. A bare-ID-only
+  // store (pre-migration, or written by a cached old build) is a plain string.
+  // Every assertion reads through these so it states the *rule* — "the saved
+  // record names the place the user saved" — not one format's spelling of it.
+  const readFavs = () => page.evaluate(() => {
+    let v;
+    try { v = JSON.parse(localStorage.getItem('mw_favs') || '[]'); } catch (e) { return { raw: 'unparseable' }; }
+    if (!Array.isArray(v)) return { raw: 'not-array' };
+    const recs = v.map((x) => {
+      if (typeof x === 'string') {
+        const [area, name] = x.split('|');
+        return { id: x, name: name || '', area: area || '', bare: true };
+      }
+      if (x && typeof x === 'object') {
+        return { id: x.id || '', name: x.name || '', area: x.area || '', bare: false };
+      }
+      return { id: '', name: '', area: '', bad: true };
+    });
+    return { raw: v, recs, ids: recs.map((r) => r.id) };
+  });
+  // A record "is" a given place if its exact name matches — the bare name, not a
+  // substring of a composite id. This is what survives the shape change.
+  const isPlace = (recs, name, area) =>
+    Array.isArray(recs) && recs.some((r) => r.name === name && (!area || !r.area || r.area === area));
+  const rowName = (i) => page.evaluate((n) => {
+    const r = document.querySelectorAll('.row')[n];
+    return r ? r.querySelector('.nm').textContent.trim() : null;
+  }, i);
+  const rowArea = (i) => page.evaluate((n) => {
+    const r = document.querySelectorAll('.row')[n];
+    const t = r && r.querySelector('.tag');
+    return t ? t.textContent.trim() : null;
+  }, i);
+
+  // Before the first save the store must be absent/empty — not "non-empty after a click".
+  const preSave = await readFavs();
+  check('favourites: nothing is stored before the first save', preSave.raw === undefined || (Array.isArray(preSave.ids) && preSave.ids.length === 0));
+
+  // Save a SPECIFIC place from the detail modal and assert that place is the one recorded.
+  const targetName = await rowName(3);
+  const targetArea = await rowArea(3);
+  await page.click('.row >> nth=3');
+  await page.waitForTimeout(300);
+  await page.click('#modal #mfav');
+  await page.waitForTimeout(300);
+  const one = await readFavs();
+  check('favourites: save from detail modal records that specific place (not just non-empty)',
+    Array.isArray(one.ids) && one.ids.length === 1 && isPlace(one.recs, targetName, targetArea));
+  const modalSaysSaved = await page.evaluate(() => /Saved|Disimpan|❤/i.test(document.getElementById('mfav').textContent));
+  check('favourites: the save control reflects the saved state', modalSaysSaved);
+  const disclaimer = await page.textContent('#modal');
+  check('favourites: per-device disclaimer present in the detail modal', /peranti|device|this phone|this device/i.test(disclaimer));
+  await page.click('#modal .x');
+  await page.waitForTimeout(200);
+
+  // Reaching favourites must be possible through the UI — no internal calls.
+  // NOTE: this must NOT match the row hearts (aria-label "Add X to favourites"),
+  // or it passes on the very thing we are removing. Scope to the filter rows and
+  // exclude .fav explicitly, then require the resulting control to actually filter.
+  const FAV_CTL = '#dir .frow button:visible:not(.fav), #dir .frow [role=button]:visible:not(.fav), [data-k="favsOnly"]:visible, [data-favs]:visible';
+  const favControls = await page.locator(FAV_CTL).evaluateAll((els) =>
+    els.filter((el) => /favourite|favorit|kegemaran|favsOnly/i.test(el.outerHTML + ' ' + el.textContent)).length
+  );
+  check('favourites: a reachable control exists in the directory (discoverable without remembering saves)',
+    favControls > 0);
+
+  if (favControls > 0) {
+    const clickable = page.locator(FAV_CTL).filter({ hasText: /kegemaran|favourite/i });
+    const clickableExists = (await clickable.count()) > 0;
+    if (clickableExists) await clickable.first().click();
+    await page.waitForTimeout(400);
+    const rowsShown = await page.locator('.row').count();
+    check('favourites: the filter narrows the directory to saved places only', clickableExists && rowsShown === 1);
+    const shownName = await rowName(0);
+    check('favourites: the filtered row is the place that was saved', shownName === targetName);
+    const header = await page.textContent('#dir .sub2, #dirsub').catch(() => '');
+    check('favourites: filtered view carries a header explaining what the list is', /favourite|kegemaran|simpan/i.test(header));
+  } else {
+    check('favourites: the filter narrows the directory to saved places only', false);
+    check('favourites: the filtered row is the place that was saved', false);
+    check('favourites: filtered view carries a header explaining what the list is', false);
+  }
+
+  // Empty state on the filtered view with zero saves.
+  // Selectors are deliberately NOT pinned to #list / #dir inner containers —
+  // Noctis is right that coupling the assertion to the render path makes it fail
+  // for reasons unrelated to the copy. Assert "visible anywhere in the directory
+  // view", which is what the user actually perceives.
+  await page.evaluate(() => localStorage.removeItem('mw_favs'));
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForTimeout(600);
+  await page.click('#dirbtn');
+  await page.waitForTimeout(400);
+  const emptyCtl = await page.locator(FAV_CTL).filter({ hasText: /kegemaran|favourite/i }).first();
+  const emptyCtlExists = (await emptyCtl.count()) > 0;
+  if (emptyCtlExists) await emptyCtl.click();
+  await page.waitForTimeout(400);
+  const dirVisibleText = (v) => v.evaluate(() => {
+    const root = document.getElementById('dir');
+    if (!root) return '';
+    // visible text only, so a hidden panel does not satisfy the assertion
+    return Array.from(root.querySelectorAll('*'))
+      .filter((el) => el.offsetParent !== null || el === root)
+      .map((el) => (el.children.length ? '' : el.textContent || ''))
+      .join(' ')
+      .replace(/\s+/g, ' ');
+  });
+  const emptyViewText = await dirVisibleText(page);
+  check('favourites: empty filtered view explains itself in BM (not a blank panel)',
+    emptyCtlExists && /kegemaran|simpan|favourite/i.test(emptyViewText));
+  check('favourites: empty filtered view carries the per-device disclaimer',
+    emptyCtlExists && /peranti|device/i.test(emptyViewText));
+
+  // Second zero-item state: saves EXIST, but another filter narrows the list to
+  // nothing. Must not reuse the first-run copy, or a user reads "no favourites"
+  // and concludes the app ate them.
+  const narrowed = await ctx.newPage();
+  await narrowed.addInitScript(() => localStorage.setItem('mw_favs', JSON.stringify(['Putrajaya|AFN Cafe & Restaurant'])));
+  await narrowed.goto(URL, { waitUntil: 'load' });
+  await narrowed.waitForTimeout(900);
+  await narrowed.click('#dirbtn');
+  await narrowed.waitForTimeout(400);
+  const nCtl = narrowed.locator(FAV_CTL).filter({ hasText: /kegemaran|favourite/i }).first();
+  const nCtlExists = (await nCtl.count()) > 0;
+  if (nCtlExists) await nCtl.click();
+  await narrowed.waitForTimeout(400);
+  // now narrow to nothing with a search term that matches no saved place
+  await narrowed.fill('#q', 'zzzznomatch');
+  await narrowed.waitForTimeout(400);
+  const narrowedText = await dirVisibleText(narrowed);
+  const savedRowShown = await narrowed.locator('.row').count();
+  check('favourites: narrowed-to-nothing state is distinguishable from the empty state',
+    nCtlExists && savedRowShown === 0 && /padan|tapisan|filter|search|cari/i.test(narrowedText) && !/tiada kedai kegemaran lagi/i.test(narrowedText));
+  await narrowed.close();
+
+  // Two-item unsave: removing one must not disturb the other.
+  await page.evaluate(() => localStorage.removeItem('mw_favs'));
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForTimeout(600);
+  await page.click('#dirbtn');
+  await page.waitForTimeout(400);
+  await page.click('.row >> nth=1');
+  await page.waitForTimeout(250);
+  await page.click('#modal #mfav');
+  await page.waitForTimeout(250);
+  await page.click('#modal .x');
+  await page.waitForTimeout(250);
+  const aName = await rowName(1);
+  const bName = await rowName(4);
+  await page.click('.row >> nth=4');
+  await page.waitForTimeout(250);
+  await page.click('#modal #mfav');
+  await page.waitForTimeout(250);
+  await page.click('#modal .x');
+  await page.waitForTimeout(250);
+  const two = await readFavs();
+  check('favourites: two saves record exactly two distinct places',
+    Array.isArray(two.recs) && two.recs.length === 2 && isPlace(two.recs, aName) && isPlace(two.recs, bName));
+  await page.click('.row >> nth=1');
+  await page.waitForTimeout(250);
+  await page.click('#modal #mfav');
+  await page.waitForTimeout(300);
+  await page.click('#modal .x');
+  await page.waitForTimeout(250);
+  const afterUnsave = await readFavs();
+  check('favourites: unsave removes the exact record opened, and leaves the other intact',
+    Array.isArray(afterUnsave.recs) && afterUnsave.recs.length === 1 && isPlace(afterUnsave.recs, bName) && !isPlace(afterUnsave.recs, aName));
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForTimeout(600);
+  const survived = await readFavs();
+  check('favourites: the surviving save persists across reload',
+    Array.isArray(survived.recs) && survived.recs.length === 1 && isPlace(survived.recs, bName) && !isPlace(survived.recs, aName));
+
+  // Corrupt payload must not take the app down. mw_favs is user-writable storage:
+  // valid JSON that is not an array is reachable from a half-written value or an
+  // older build, and today it poisons the whole directory render.
+  for (const [label, payload] of [
+    ['valid JSON, not an array', '{"not":"an array"}'],
+    ['valid JSON, array of things', '[{"broken":true},null,42]'],
+    ['garbage', 'not json at all'],
+    // The half-migrated store a mid-rollout cache produces: one bare-ID string and
+    // one approved-shape record in the same array. The accessor must resolve BOTH.
+    ['mixed bare-ID + snapshot record', JSON.stringify(['Putrajaya|AFN Cafe & Restaurant', { id: 'Cyberjaya|Some Place', name: 'Some Place', area: 'Cyberjaya' }])],
+  ]) {
+    const cp = await ctx.newPage();
+    const cpErrs = [];
+    cp.on('pageerror', (e) => cpErrs.push(String(e).split('\n')[0]));
+    await cp.addInitScript((v) => localStorage.setItem('mw_favs', v), payload);
+    await cp.goto(URL, { waitUntil: 'load' });
+    await cp.waitForTimeout(900);
+    await cp.click('#dirbtn');
+    await cp.waitForTimeout(500);
+    const cpRows = await cp.locator('.row').count();
+    const cpFavs = await cp.evaluate(() => localStorage.getItem('mw_favs'));
+    check(`favourites: corrupt mw_favs (${label}) does not throw`, cpErrs.length === 0);
+    check(`favourites: corrupt mw_favs (${label}) still renders the directory`, cpRows >= 100);
+    // A bad value must be normalised in storage, not merely survived on read —
+    // otherwise the poison is still there for the next code path that touches it.
+    let normalised = true;
+    try { normalised = Array.isArray(JSON.parse(cpFavs || '[]')); } catch (e) { normalised = false; }
+    if (!/mixed/.test(label)) {
+      check(`favourites: corrupt mw_favs (${label}) is normalised in storage`, normalised);
+    }
+    await cp.close();
+  }
+
+  // Approved record shape: { id, name, area, lat?, lon?, cuisine? } — id stays
+  // "Area|Name", name is the BARE human name. A save must write that shape, not a
+  // bare id string; a migration must read a bare id and produce it.
+  //
+  // Two defects fixed here, both mine (found by Cloud, verified by probe):
+  //  1. area was read as global `querySelectorAll('.row .tag')[2]`. Each row has TWO
+  //     .tag elements (area, craving), so index 2 is row **0**'s area, not row 2's.
+  //     Read row-scoped: `.row >> nth=2` then that row's own `.tag`.
+  //  2. it read `written[0]`. This page SHARES a context with earlier blocks, so a
+  //     pre-existing favourite occupies index 0 and the assertion compared row 2
+  //     against an unrelated record. Fixes: give this block its OWN context (the
+  //     context is the storage boundary, not the page), and locate the record by the
+  //     id this block just created rather than by array position.
+  const shapeCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const shape = await shapeCtx.newPage();
+  await shape.goto(URL, { waitUntil: 'load' });
+  await shape.waitForTimeout(900);
+  await shape.click('#dirbtn');
+  await shape.waitForTimeout(500);
+  const row2 = await shape.evaluate(() => {
+    const r = document.querySelectorAll('.row')[2];
+    return { name: r.querySelector('.nm').textContent.trim(), area: r.querySelector('.tag').textContent.trim() };
+  });
+  await shape.evaluate(() => localStorage.removeItem('mw_favs'));
+  const preShape = await shape.evaluate(() => localStorage.getItem('mw_favs'));
+  await shape.click('.row >> nth=2');
+  await shape.waitForTimeout(300);
+  await shape.click('#modal #mfav');
+  await shape.waitForTimeout(400);
+  const written = await shape.evaluate(() => { try { return JSON.parse(localStorage.getItem('mw_favs') || '[]'); } catch (e) { return 'unparseable'; } });
+  const wantedId = row2.area + '|' + row2.name;
+  const rec = Array.isArray(written) ? written.find((x) => x && typeof x === 'object' && x.id === wantedId) : null;
+  check('favourites: the store is empty before this save (no cross-block contamination)',
+    preShape === null && Array.isArray(written) && written.length === 1);
+  check('favourites: a save writes the approved record shape {id,name,area} (not a bare id string)',
+    !!rec && typeof rec.id === 'string' && rec.name === row2.name && rec.area === row2.area && rec.id === wantedId);
+  await shapeCtx.close();
+
+  // Migrated bare-ID save must render a card with a real, correct name AND area.
+  const mig = await ctx.newPage();
+  const migErrs = [];
+  mig.on('pageerror', (e) => migErrs.push(String(e).split('\n')[0]));
+  await mig.addInitScript(() => localStorage.setItem('mw_favs', JSON.stringify(['Putrajaya|AFN Cafe & Restaurant'])));
+  await mig.goto(URL, { waitUntil: 'load' });
+  await mig.waitForTimeout(900);
+  await mig.click('#dirbtn');
+  await mig.waitForTimeout(500);
+  const migCtl = mig.locator(FAV_CTL).filter({ hasText: /kegemaran|favourite/i }).first();
+  const migCtlExists = (await migCtl.count()) > 0;
+  if (migCtlExists) await migCtl.click();
+  await mig.waitForTimeout(400);
+  if (migCtlExists) {
+    const migRows = await mig.locator('.row').count();
+    const migName = migRows ? (await mig.textContent('.row .nm')).trim() : '';
+    const migArea = migRows ? (await mig.textContent('.row .tag')).trim() : '';
+    check('favourites: a migrated bare-ID save renders a card with a visible, correct name',
+      migRows === 1 && migName === 'AFN Cafe & Restaurant');
+    check('favourites: a migrated bare-ID save renders the area on the card',
+      migRows === 1 && migArea === 'Putrajaya');
+    // And the migration must have upgraded it in storage to the approved shape.
+    const migStore = await mig.evaluate(() => { try { return JSON.parse(localStorage.getItem('mw_favs') || '[]'); } catch (e) { return 'unparseable'; } });
+    const m0 = Array.isArray(migStore) ? migStore[0] : null;
+    check('favourites: a migrated bare-ID save is upgraded in storage to the approved shape',
+      !!m0 && typeof m0 === 'object' && m0.id === 'Putrajaya|AFN Cafe & Restaurant' && m0.name === 'AFN Cafe & Restaurant' && m0.area === 'Putrajaya');
+  } else {
+    check('favourites: a migrated bare-ID save renders a card with a visible, correct name', false);
+    check('favourites: a migrated bare-ID save renders the area on the card', false);
+    check('favourites: a migrated bare-ID save is upgraded in storage to the approved shape', false);
+  }
+  check('favourites: migrated save load throws nothing', migErrs.length === 0);
+  await mig.close();
+
+  // Noctis's call: a favourite card shows no distance at all — omitted, not a "—"
+  // placeholder. Two assertions, because one is not enough to hold the rule:
+  //   (a) no .dist element in the favourite card
+  //   (b) no distance-shaped TEXT either (km / m / "—"), which is what catches the
+  //       placeholder case a missing-element check would pass.
+  const dist = await ctx.newPage();
+  await dist.addInitScript(GEO_STUB);
+  await dist.addInitScript(() => localStorage.setItem('mw_favs', JSON.stringify(['Putrajaya|AFN Cafe & Restaurant'])));
+  await dist.goto(URL, { waitUntil: 'load' });
+  await dist.waitForTimeout(900);
+  // turn location on so every non-favourite row WOULD show a distance
+  await dist.click('#locbtn');
+  await dist.waitForTimeout(800);
+  await dist.click('#dirbtn');
+  await dist.waitForTimeout(600);
+  const distCtl = dist.locator(FAV_CTL).filter({ hasText: /kegemaran|favourite/i }).first();
+  const distCtlExists = (await distCtl.count()) > 0;
+  if (distCtlExists) await distCtl.click();
+  await dist.waitForTimeout(500);
+  const cfg = await dist.evaluate(() => {
+    const row = document.querySelector('.row');
+    if (!row) return { hasRow: false };
+    const meta = row.querySelector('.meta') || row;
+    const txt = (meta.textContent || '').replace(/\s+/g, ' ');
+    return {
+      hasRow: true,
+      distEls: row.querySelectorAll('.dist').length,
+      metaText: txt.trim(),
+      distShaped: /(\d[\d.]*\s*(km|m)\b)/.test(txt),
+      placeholder: /(^|[\s|·])—([\s|·]|$)/.test(txt),
+    };
+  });
+  check('favourites: a favourite card renders no distance element',
+    distCtlExists && cfg.hasRow && cfg.distEls === 0);
+  check('favourites: a favourite card renders no distance text or placeholder (no "—", no "km")',
+    distCtlExists && cfg.hasRow && !cfg.distShaped && !cfg.placeholder);
+  await dist.close();
+
+  // Noctis's honesty rule: never show a save as successful when the write failed.
+  // With mw_favs writes throwing (blocked storage / quota), the in-memory array
+  // still mutates, so isFav() returns true and the UI would render success for a
+  // save that dies on reload. Replaces the row-heart half of this check once the
+  // heart is removed — after removal the modal is the only save surface, and this
+  // asserts on #mfav, which stays.
+  const blocked = await ctx.newPage();
+  const blockedErrs = [];
+  blocked.on('pageerror', (e) => blockedErrs.push(String(e).split('\n')[0]));
+  await blocked.addInitScript(() => {
+    const proto = Object.getPrototypeOf(window.localStorage);
+    const g = proto.getItem;
+    const s = proto.setItem;
+    proto.getItem = function (k) { if (k === 'mw_favs') throw new DOMException('denied', 'SecurityError'); return g.call(this, k); };
+    proto.setItem = function (k, v) { if (k === 'mw_favs') throw new DOMException('quota', 'QuotaExceededError'); return s.call(this, k, v); };
+  });
+  await blocked.goto(URL, { waitUntil: 'load' });
+  await blocked.waitForTimeout(1000);
+  await blocked.click('#dirbtn');
+  await blocked.waitForTimeout(500);
+  await blocked.click('.row >> nth=0');
+  await blocked.waitForTimeout(350);
+  const savedLabel = /saved|disimpan|❤/i;
+  const beforeBlocked = (await blocked.textContent('#modal #mfav')).trim();
+  await blocked.click('#modal #mfav');
+  await blocked.waitForTimeout(500);
+  const afterBlocked = (await blocked.textContent('#modal #mfav')).trim();
+  check('favourites: a save that cannot be persisted is not shown as successful',
+    !savedLabel.test(beforeBlocked) && !savedLabel.test(afterBlocked));
+  check('favourites: a blocked-storage save attempt throws nothing', blockedErrs.length === 0);
+  await blocked.close();
+
+  // Row-heart removal must be complete: no button, no CSS hook, no stranded guard.
+  const heartGone = await page.evaluate(() => {
+    const inDom = document.querySelectorAll('.fav, .mw-heart, [data-fav], .row button, .row [data-fav]').length;
+    let inCss = 0;
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules = [];
+      try { rules = Array.from(sheet.cssRules); } catch (e) { continue; }
+      for (const r of rules) if (r.selectorText && /\.fav\b|\.mw-heart\b/.test(r.selectorText)) inCss++;
+    }
+    return { inDom, inCss };
+  });
+  check('favourites: no row-heart DOM remains (no .fav / [data-fav] buttons)', heartGone.inDom === 0);
+  check('favourites: no row-heart CSS rules remain', heartGone.inCss === 0);
+
+  await ctx.close(); await ctx.close();
+
+  // Row click must still open the modal after the heart + its guard are removed.
+  // This is the assertion that catches a half-removal: drop the DOM but leave the
+  // line-535 closest('.fav') guard, or the stopPropagation, and row taps die.
+  const rcctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const rc = await rcctx.newPage();
+  await rc.addInitScript(GEO_STUB);
+  await rc.goto(URL, { waitUntil: 'load' });
+  await rc.waitForTimeout(900);
+  await rc.click('#dirbtn');
+  await rc.waitForTimeout(500);
+  await rc.click('.row >> nth=2');
+  await rc.waitForTimeout(400);
+  check('favourites: row click still opens the detail modal after heart removal',
+    (await rc.locator('#modalbg:visible').count()) === 1);
+  await rcctx.close();
 
   // ---------- Mobile ----------
   const mctx = await browser.newContext({

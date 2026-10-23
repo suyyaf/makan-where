@@ -4,7 +4,9 @@
   "private": true,
   "description": "🍚 Decides where you're eating tonight — Cyberjaya & Putrajaya edition",
   "scripts": {
-    "test": "node tests/smoke.mjs",
+    "test": "node tests/smoke.mjs && node tests/favourites-behaviour.mjs",
+    "test:smoke": "node tests/smoke.mjs",
+    "test:favs": "node tests/favourites-behaviour.mjs",
     "test:prod": "cross-env SMOKE_URL=https://makan-where-steel.vercel.app node tests/smoke.mjs"
   },
   "devDependencies": {

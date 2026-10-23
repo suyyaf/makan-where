@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Makan Where? — Cyberjaya & Putrajaya</title>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-XSklmvV2mN3zM0OxlcZ3s665mIc3HXjEp/M9f8WD7iA='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-SQsr/Leb5sYJ+X1Qf2SJf+yn/H1YqJwV09KM7mB56Mc='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#ffb43a">
 <meta name="description" content="Decides where you're eating tonight — Cyberjaya & Putrajaya. 179 places, proximity-ranked top picks, receipt-style randomiser.">
 <link rel="canonical" href="https://makan-where-steel.vercel.app/">
@@ -164,9 +164,13 @@
   .receipt .rst { font-size:.72rem; font-weight:600; letter-spacing:.06em; }
   .receipt .rst.open { color:#2c7a19; }
   .receipt .rst.closed { color:#b3341f; }
-  .row .fav { background:none; border:none; font-size:1.05rem; cursor:pointer; color:var(--muted); flex:0 0 auto; }
-  .row .fav.on { color:var(--pink); }
   .row .chev { color:var(--muted); flex:0 0 auto; }
+
+  /* ---- directory zero-item states ---- */
+  .emptystate { margin:18px 18px 26px; padding:26px 20px; border:1px dashed #5a4c26; border-radius:16px; background:var(--card); text-align:center; }
+  .emptystate .st { font-family:var(--display); font-size:1.05rem; letter-spacing:.02em; color:var(--fg); }
+  .emptystate .sb { color:var(--muted); font-size:.8rem; line-height:1.5; margin-top:8px; }
+  .emptystate .note { font-family:var(--mono); font-size:.68rem; letter-spacing:.04em; margin-top:12px; color:#8a7d5c; }
 
   /* ---- optional criteria chit ---- */
   .crit { margin:6px 18px 0; border:1px solid var(--border); border-radius:14px; background:var(--card); overflow:hidden; }
@@ -202,6 +206,7 @@
   #modal .dist { color:var(--accent); font-weight:600; }
   #modal a.btn { display:block; text-align:center; margin-top:14px; background:var(--accent); color:#231a06; padding:12px; border-radius:12px; text-decoration:none; font-weight:700; box-shadow:0 0 18px rgba(255,180,58,.25); }
   #modal .btn2 { display:block; width:100%; margin-top:8px; background:var(--card2); border:1px solid var(--border); color:var(--fg); padding:11px; border-radius:12px; cursor:pointer; font-size:.9rem; font-family:var(--body); }
+  #modal .favnote { color:var(--muted); font-family:var(--mono); font-size:.66rem; letter-spacing:.03em; margin-top:8px; text-align:center; }
   #toast { position:fixed; top:calc(14px + env(safe-area-inset-top)); pointer-events:none; left:50%; transform:translateX(-50%) translateY(-160%); background:var(--accent); color:#231a06; padding:10px 18px; border-radius:10px; font-weight:700; font-size:.82rem; transition:transform .25s; z-index:300; max-width:85vw; text-align:center; box-shadow:0 4px 16px rgba(0,0,0,.4); }
   #toast.show { transform:translateX(-50%) translateY(0); }
 
@@ -273,9 +278,10 @@
   </div>
 
   <div class="frow" id="area"></div>
-  <div class="frow" id="craving"></div>
-  <div class="frow" id="band"></div>
-  <div class="frow" id="extras"></div>
+    <div class="frow" id="craving"></div>
+    <div class="frow" id="band"></div>
+    <div class="frow" id="extras"></div>
+    <div class="frow" id="favrow"></div>
 
   <div class="mapsec" id="mapsec">
     <div class="maphead" id="maphead"><span>🗺️ Map</span><span class="arr">▾</span></div>
@@ -447,15 +453,20 @@ const favRecord = p => ({ id: p.id, name: p.name, area: p.area,
                           ...(p.lat != null ? { lat: p.lat } : {}),
                           ...(p.lon != null ? { lon: p.lon } : {}),
                           ...(p.cuisine ? { cuisine: p.cuisine } : {}) });
-/* Resolve a saved record back to live place data when we have it, so filters,
-   distance and the modal keep working. Falls back to the stored record when the
-   place is gone from the current pull. */
+/* Resolve a saved record back to live place data when we have it, so filters and
+   the modal keep working. Falls back to the stored record when the place is gone
+   from the current pull.
+
+   Deliberately drops `_dist`: a favourite row shows no distance at all, not a
+   placeholder. Distance answers "what is near me right now"; a saved place is
+   saved, so rendering it as though it were a live proximity result is a claim we
+   don't need to make — and for a stale save we could not make it honestly. */
 const favAsPlace = r => {
   const live = PLACES.find(p => p.id === r.id);
-  if (live) return live;
+  if (live) return { ...live, _dist: null };
   return { id: r.id, name: r.name, area: r.area, craving: r.cuisine || '',
            lat: r.lat != null ? r.lat : null, lon: r.lon != null ? r.lon : null,
-           price: '', url: '', phone: '', hours: '', halal: null, _open: null, _stale: true };
+           price: '', url: '', phone: '', hours: '', halal: null, _open: null, _dist: null, _stale: true };
 };
 
 /* receipt zigzag tear edge */
@@ -565,12 +576,21 @@ function chipRow(el, items, key, label) {
   });
 }
 function filtered() {
-  let list = PLACES.filter(p =>
+  /* When the favourites filter is on we drive the list from the saved records, not
+     from PLACES: a save whose place has dropped out of the latest OSM pull must
+     still render (from its stored name+area), instead of silently vanishing and
+     looking like the app ate it. */
+  let base;
+  if (f.favsOnly) {
+    base = favs.map(favAsPlace);
+  } else {
+    base = PLACES.slice();
+  }
+  let list = base.filter(p =>
     (f.area==='All' || p.area===f.area) &&
     (f.craving==='All' || p.craving===f.craving) &&
-    (f.band==='All' || p.band===f.band) &&
-    (!f.q || p.name.toLowerCase().includes(f.q) || p.craving.toLowerCase().includes(f.q)) &&
-    (!f.favsOnly || isFav(p)) &&
+    (f.band==='All' || (p.band && p.band===f.band)) &&
+    (!f.q || (p.name||'').toLowerCase().includes(f.q) || (p.craving||'').toLowerCase().includes(f.q)) &&
     (!f.openOnly || p._open === true) &&
     (!f.halalOnly || p.halal === true));
   const s = document.getElementById('sort').value;
@@ -590,9 +610,44 @@ function syncSortOption() {
 }
 
 /* ---- directory list ---- */
+/* The favourites control lives in the filter rows with the other chips, so it is
+   discoverable without having to remember which rows were saved. It is a filter,
+   not a new navigation model. */
+function renderFavChip() {
+  const el = document.getElementById('favrow');
+  if (!el) return;
+  el.innerHTML = `<span class="lab">❤</span>` +
+    `<button class="chip${f.favsOnly?' on':''}" data-k="favsOnly" aria-pressed="${f.favsOnly}">Kedai kegemaran (${favs.length})</button>`;
+  el.querySelector('button').onclick = () => { f.favsOnly = !f.favsOnly; renderFavChip(); render(); };
+}
+/* Two distinct zero-item states, deliberately not sharing copy:
+     (a) favourites on, nothing saved yet        -> explain what saving does
+     (b) favourites on, saves exist but the list is narrowed to nothing by a
+         search or another filter               -> say the list is narrowed, because
+         reusing (a) reads as "the app lost my favourites".
+   Both carry the per-device line, because this is where the promise is made. */
+function dirEmptyHTML() {
+  const saved = favs.length;
+  if (saved === 0) {
+    return `<div class="emptystate">
+      <div class="st">Tiada kedai kegemaran lagi</div>
+      <div class="sb">Buka butiran mana-mana kedai dan tekan “Simpan kegemaran” — dia akan muncul di sini.</div>
+      <div class="sb note">Disimpan pada peranti ini sahaja.</div>
+    </div>`;
+  }
+  return `<div class="emptystate">
+    <div class="st">Tiada kedai kegemaran padan tapisan ini</div>
+    <div class="sb">${saved} kedai kegemaran tersimpan. Kosongkan carian atau tapisan lain untuk melihatnya.</div>
+    <div class="sb note">Disimpan pada peranti ini sahaja.</div>
+  </div>`;
+}
 function render() {
   const list = filtered();
   document.getElementById('count').textContent = list.length + ' place' + (list.length!==1?'s':'') + (f.favsOnly?' · favourites':'');
+  const sub = document.getElementById('dirsub');
+  if (sub) sub.textContent = f.favsOnly
+    ? 'Kedai kegemaran anda — ' + favs.length + ' disimpan pada peranti ini'
+    : 'Cyberjaya · Putrajaya — ' + PLACES.length + ' eateries';
   const az = document.getElementById('sort').value === 'name';
   let html = '', lastL = '';
   list.forEach((p,i) => {
@@ -604,24 +659,27 @@ function render() {
       <div class="mid">
         <div class="nm">${esc(p.name)}</div>
         <div class="meta">
-          <span class="tag">${esc(p.area)}</span><span class="tag">${esc(p.craving)}</span>
-          <span class="pr">${esc(p.price)} est.</span>
+          <span class="tag">${esc(p.area)}</span>
+          ${p.craving?`<span class="tag">${esc(p.craving)}</span>`:''}
+          ${p.price?`<span class="pr">${esc(p.price)} est.</span>`:''}
           ${p._dist!=null?`<span class="dist">📍 ${fmtDist(p._dist)}</span>`:''}
           ${p._open===true?'<span class="open">🟢 Open</span>':''}${p._open===false?'<span class="closed">🔴 Closed</span>':''}${p.halal?'<span class="halaltag">🕌 Halal</span>':''}
         </div>
       </div>
-      <button class="fav${isFav(p)?' on':''}" data-fav="${i}" aria-label="${isFav(p)?'Remove':'Add'} ${esc(p.name)} ${isFav(p)?'from':'to'} favourites" aria-pressed="${isFav(p)}">${isFav(p)?'❤':'🤍'}</button>
       <span class="chev">›</span>
     </div>`;
   });
-  document.getElementById('list').innerHTML = html || '<div class="count">No matches — try clearing filters.</div>';
+  /* A favourite we cannot resolve in live data renders no distance element at all
+     rather than a "—" placeholder: absence reads as not-applicable, a placeholder
+     reads as broken. */
+  document.getElementById('list').innerHTML = html ||
+    (f.favsOnly ? dirEmptyHTML() : '<div class="emptystate"><div class="st">Tiada padanan</div><div class="sb">Cuba kosongkan carian atau tapisan.</div></div>');
   document.querySelectorAll('.row').forEach(r => {
-    r.onclick = e => { if (e.target.closest('.fav')) return; openModal(list[+r.dataset.id], r); };
+    r.onclick = () => openModal(list[+r.dataset.id], r);
     r.onkeydown = e => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(list[+r.dataset.id], r); }
     };
   });
-  document.querySelectorAll('.fav').forEach(b => b.onclick = e => { e.stopPropagation(); toggleFav(list[+b.dataset.fav]); });
   drawMap(list);
 }
 
@@ -833,7 +891,8 @@ function openModal(p, trigger) {
     ${p.hours?`<div class="row2">🕒 ${esc(p.hours)}</div>`:''}
     ${dialable(p.phone)?`<div class="row2">📞 <a href="tel:${esc(String(p.phone).replace(/[^\d+]/g,''))}" style="color:var(--accent)">${esc(p.phone)}</a></div>`:''}
     <a class="btn" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener noreferrer">Open in Maps ↗</a>
-    <button class="btn2" id="mfav">${isFav(p)?'❤ Saved to favourites':'🤍 Save to favourites'}</button>`;
+    <button class="btn2" id="mfav">${isFav(p)?'❤ Saved to favourites':'🤍 Save to favourites'}</button>
+    <div class="favnote">Disimpan pada peranti ini sahaja — tidak sync antara peranti.</div>`;
   modal.querySelector('.x').onclick = closeModal;
   modal.querySelector('#mfav').onclick = () => toggleFav(p);
   mbg.style.display = 'flex';
@@ -851,10 +910,28 @@ function closeModal() {
   lastTrigger = null;
 }
 mbg.addEventListener('click', e => { if (e.target === mbg) closeModal(); });
+/* Save/unsave. The record is denormalised (name + area stored alongside the id) so
+   the favourites view can still render a place honestly after it drops out of the
+   latest OSM pull, instead of showing an id or an empty card.
+
+   The write is checked before anything is reported as saved: if storage refuses it
+   (disabled, quota full), the in-memory array still holds the change but it will not
+   survive a reload, so we roll it back and say so rather than showing a success the
+   user will not get back. */
 function toggleFav(p) {
-  const i = favs.indexOf(p.id);
-  if (i >= 0) { favs.splice(i,1); toast('Removed ' + p.name); } else { favs.push(p.id); toast('Saved ' + p.name + ' ❤'); }
-  saveFavs(); render(); if (mbg.style.display === 'flex') openModal(p);
+  const wasFav = isFav(p);
+  const before = favs.slice();
+  if (wasFav) favs = favs.filter(r => r.id !== p.id);
+  else favs = favs.concat([favRecord(p)]);
+  if (!writeFavs()) {
+    favs = before;
+    toast('Tak dapat simpan — storan peranti tak tersedia');
+    renderFavChip(); render();
+    if (mbg.style.display === 'flex') openModal(p);
+    return;
+  }
+  toast(wasFav ? 'Dibuang dari kegemaran' : 'Disimpan ke kegemaran ❤');
+  renderFavChip(); render(); if (mbg.style.display === 'flex') openModal(p);
 }
 
 function toast(msg) {
@@ -881,12 +958,12 @@ chipRow(document.getElementById('band'), ['All',...Object.keys(BAND)], 'band', '
       `<button class="chip${f.openOnly?' on':''}" data-k="openOnly">🟢 Open now</button>` +
       `<button class="chip${f.halalOnly?' on':''}" data-k="halalOnly">🕌 Halal</button>`;
     ex.querySelectorAll('.chip').forEach(c => c.onclick = () => {
-      f[c.dataset.k] = !f[c.dataset.k]; build(); render();
+      f[c.dataset.k] = !f[c.dataset.k]; build(); renderFavChip(); render();
     });
   };
   build();
 })();
-renderTops(); render(); renderCrit(); syncSortOption();
+renderTops(); renderFavChip(); render(); renderCrit(); syncSortOption();
 document.getElementById('tcount').textContent = PLACES.length + ' places';
 document.getElementById('dirbtn').querySelector('small').textContent = 'search all ' + PLACES.length + ' · A–Z · map';
 document.getElementById('dirsub').textContent = 'Cyberjaya · Putrajaya — ' + PLACES.length + ' eateries';
