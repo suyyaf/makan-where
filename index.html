@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Makan Where? — Cyberjaya & Putrajaya</title>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-BdVgjT1Gc/IINChDC3axymQHdoaWbXi2UsNDKr1a2m0='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-XSklmvV2mN3zM0OxlcZ3s665mIc3HXjEp/M9f8WD7iA='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#ffb43a">
 <meta name="description" content="Decides where you're eating tonight — Cyberjaya & Putrajaya. 179 places, proximity-ranked top picks, receipt-style randomiser.">
 <link rel="canonical" href="https://makan-where-steel.vercel.app/">
@@ -370,9 +370,93 @@ PLACES.forEach(p => { p._open = parseOH(p.hours); });
 const OPEN_TXT = p => p._open === true ? '🟢 Open now' : p._open === false ? '🔴 Closed now' : null;
 let f = { area:'All', craving:'All', band:'All', q:'', favsOnly:false, openOnly:false, halalOnly:false };
 let me = null, selPin = null, spinning = false, lastTrigger = null;
-let favs = (() => { try { return JSON.parse(localStorage.getItem('mw_favs')||'[]'); } catch(e){ return []; } })();
-const saveFavs = () => { try { localStorage.setItem('mw_favs', JSON.stringify(favs)); } catch(e){} };
-const isFav = p => favs.includes(p.id);
+/* Favourites live in localStorage under 'mw_favs', which makes them
+   user-writable and version-crossing state: a half-written value, a quota-truncated
+   one, or anything a cached older build left behind is reachable input. It must
+   never be trusted as an array, and it must never reach a code path that assumes
+   one — `favs.includes` on a non-array throws and takes the whole directory render
+   down with it.
+
+   The approved on-disk record shape is { id, name, area, lat?, lon?, cuisine? }
+   with id === "Area|Name" and `name` the bare human name. A bare-ID string is the
+   pre-migration shape (or what a cached old build writes), and both shapes must
+   resolve — a half-migrated store is an array holding one of each. */
+const FAV_SHAPE_MSG = 'mw_favs held an unusable value and was reset';
+function normaliseFavs(raw) {
+  if (typeof raw === 'string') {
+    const [area, name] = raw.split('|');
+    if (!area || !name) return null;                     // can't resolve a name: drop it
+    return { id: raw, name, area };
+  }
+  if (raw && typeof raw === 'object' && typeof raw.id === 'string' && raw.id) {
+    const [idArea, idName] = raw.id.split('|');
+    const name = typeof raw.name === 'string' && raw.name ? raw.name : (idName || '');
+    const area = typeof raw.area === 'string' && raw.area ? raw.area : (idArea || '');
+    if (!name || !area) return null;                     // name+area are mandatory to render
+    const rec = { id: raw.id, name, area };
+    if (raw.lat != null) rec.lat = raw.lat;
+    if (raw.lon != null) rec.lon = raw.lon;
+    if (typeof raw.cuisine === 'string' && raw.cuisine) rec.cuisine = raw.cuisine;
+    return rec;
+  }
+  return null;                                           // 42, null, {broken:true}, ...
+}
+function loadFavs() {
+  let parsed;
+  try { parsed = JSON.parse(localStorage.getItem('mw_favs') || '[]'); }
+  catch (e) { parsed = null; }
+  const list = Array.isArray(parsed) ? parsed : [];
+  if (!Array.isArray(parsed)) { toast(FAV_SHAPE_MSG); }  // survive it, don't hide it
+  const out = [];
+  const seen = new Set();
+  list.forEach(x => {
+    const r = normaliseFavs(x);
+    if (!r || seen.has(r.id)) return;                    // drop unusable + duplicate ids
+    seen.add(r.id);
+    out.push(r);
+  });
+  return out;
+}
+let favs = loadFavs();
+/* Best-effort write-back. Storage can be absent entirely (file://, private mode),
+   or throw on write (disabled, quota full). A failed write must never propagate:
+   the write-back on load and the save path are both non-essential to rendering.
+   Returns true only when the value actually landed, so callers can refuse to show
+   a save as successful when it did not survive. */
+const writeFavs = () => {
+  try { localStorage.setItem('mw_favs', JSON.stringify(favs)); return true; }
+  catch (e) { return false; }
+};
+const saveFavs = writeFavs;
+/* Normalise once on load so a poisoned value cannot re-brick the next code path
+   that touches it. Only writes when the stored bytes actually differ — otherwise
+   every load rewrites storage for no reason. */
+(() => {
+  let raw = null;
+  try { raw = localStorage.getItem('mw_favs'); } catch (e) { return; }
+  if (raw == null) return;
+  let same = false;
+  try { same = JSON.stringify(JSON.parse(raw)) === JSON.stringify(favs); } catch (e) { same = false; }
+  if (!same) writeFavs();
+})();
+const isFav = p => favs.some(r => r.id === p.id);
+/* Render a saved record the way the directory renders a place: name + area are
+   mandatory, everything else is optional and simply absent. A save whose place has
+   dropped out of the latest OSM pull still renders honestly from the stored record. */
+const favRecord = p => ({ id: p.id, name: p.name, area: p.area,
+                          ...(p.lat != null ? { lat: p.lat } : {}),
+                          ...(p.lon != null ? { lon: p.lon } : {}),
+                          ...(p.cuisine ? { cuisine: p.cuisine } : {}) });
+/* Resolve a saved record back to live place data when we have it, so filters,
+   distance and the modal keep working. Falls back to the stored record when the
+   place is gone from the current pull. */
+const favAsPlace = r => {
+  const live = PLACES.find(p => p.id === r.id);
+  if (live) return live;
+  return { id: r.id, name: r.name, area: r.area, craving: r.cuisine || '',
+           lat: r.lat != null ? r.lat : null, lon: r.lon != null ? r.lon : null,
+           price: '', url: '', phone: '', hours: '', halal: null, _open: null, _stale: true };
+};
 
 /* receipt zigzag tear edge */
 (() => {
